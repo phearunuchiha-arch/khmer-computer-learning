@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>រៀនកុំព្យូទ័រ</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Noto Sans Khmer', sans-serif; background: #f4f6fb; color: #1f2937; line-height: 1.8; }
+    header { background: #1e3a8a; color: #fff; padding: 20px; text-align: center; }
+    header h1 { font-size: 1.6rem; }
+    .container { max-width: 960px; margin: 24px auto; padding: 0 16px; display: grid; grid-template-columns: 260px 1fr; gap: 20px; }
+    @media (max-width: 700px) { .container { grid-template-columns: 1fr; } }
+    nav, .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    nav button { display: flex; justify-content: space-between; width: 100%; padding: 10px 12px; margin-bottom: 6px; border: none; border-radius: 8px; background: none; cursor: pointer; font: inherit; text-align: left; }
+    nav button:hover { background: #eef2ff; }
+    nav button.active { background: #dbeafe; color: #1e3a8a; font-weight: 700; }
+    .progress { height: 10px; background: #e5e7eb; border-radius: 6px; margin: 12px 0 4px; overflow: hidden; }
+    .progress-bar { height: 100%; width: 0; background: #2563eb; transition: width 0.3s; }
+    .progress-text { font-size: 0.9rem; color: #6b7280; }
+    .card h2 { color: #1e3a8a; margin-bottom: 12px; }
+    .card p { margin-bottom: 12px; }
+    .quiz { margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+    .quiz label { display: block; padding: 10px; margin: 6px 0; border: 1px solid #d1d5db; border-radius: 8px; cursor: pointer; }
+    .quiz label:hover { background: #f9fafb; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font: inherit; margin-top: 12px; }
+    .btn:hover { background: #1d4ed8; }
+    .btn:disabled { background: #9ca3af; cursor: wait; }
+    .feedback { margin-top: 12px; font-weight: 700; }
+    .correct { color: #16a34a; }
+    .wrong { color: #dc2626; }
+    .login { max-width: 400px; margin: 60px auto; text-align: center; }
+    .login input { width: 100%; padding: 10px; font: inherit; border: 1px solid #d1d5db; border-radius: 8px; margin: 12px 0; }
+    .error { color: #dc2626; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>រៀនកុំព្យូទ័រ</h1>
+  <p>មេរៀនងាយៗសម្រាប់អ្នកចាប់ផ្តើម</p>
+</header>
+
+<div id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = "https://tnqiptwaoxkmrvcnmkpg.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRucWlwdHdhb3hrbXJ2Y25ta3BnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzNjU1MjcsImV4cCI6MjEwNTk0MTUyN30.rNvr4MV9A2T07i7de8c6XK54GpEdetDmeyCVw1x4tWI";
+
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  let learner = null;
+  let lessons = [];
+  let completed = new Set();
+  let currentIndex = 0;
+
+  const app = document.getElementById("app");
+
+  function showLogin(message = "") {
+    app.innerHTML = `
+      <div class="card login">
+        <h2>សូមបញ្ចូលឈ្មោះរបស់អ្នក</h2>
+        <input id="nameInput" type="text" placeholder="ឈ្មោះ" maxlength="50">
+        <button class="btn" id="loginBtn">ចូលរៀន</button>
+        <p class="error">${message}</p>
+      </div>`;
+    document.getElementById("loginBtn").onclick = login;
+    document.getElementById("nameInput").onkeydown = e => { if (e.key === "Enter") login(); };
+  }
+
+  async function login() {
+    const name = document.getElementById("nameInput").value.trim();
+    if (!name) return showLogin("សូមបញ្ចូលឈ្មោះ។");
+
+    const btn = document.getElementById("loginBtn");
+    btn.disabled = true;
+
+    let { data, error } = await sb.from("learners").select("id, name").eq("name", name).maybeSingle();
+    if (error) return showLogin("មានបញ្ហាក្នុងការភ្ជាប់។");
+
+    if (!data) {
+      const res = await sb.from("learners").insert({ name }).select("id, name").single();
+      if (res.error) return showLogin("មានបញ្ហាក្នុងការចុះឈ្មោះ។");
+      data = res.data;
+    }
+
+    learner = data;
+    await loadApp();
+  }
+
+  async function loadApp() {
+    app.innerHTML = `<p style="text-align:center;margin:60px">កំពុងផ្ទុក...</p>`;
+
+    const [lessonRes, progRes] = await Promise.all([
+      sb.from("lessons").select("*").order("position"),
+      sb.from("progress").select("lesson_id").eq("learner_id", learner.id)
+    ]);
+
+    if (lessonRes.error || progRes.error) {
+      app.innerHTML = `<p class="card" style="margin:24px">មិនអាចទាញទិន្នន័យបាន។</p>`;
+      return;
+    }
+
+    lessons = lessonRes.data.map(l => ({
+      id: l.id,
+      title: l.title,
+      content: l.content,
+      quiz: { question: l.quiz_question, options: l.quiz_options, answer: l.quiz_answer }
+    }));
+    completed = new Set(progRes.data.map(p => p.lesson_id));
+    renderApp();
+  }
+
+  function renderApp() {
+    app.innerHTML = `
+      <div class="container">
+        <nav id="lessonList"></nav>
+        <main class="card" id="lessonView"></main>
+      </div>`;
+    render();
+  }
+
+  function renderNav() {
+    const nav = document.getElementById("lessonList");
+    nav.innerHTML = `<p style="margin-bottom:10px">👤 ${learner.name}</p>`;
+    lessons.forEach((lesson, i) => {
+      const btn = document.createElement("button");
+      btn.textContent = lesson.title;
+      if (i === currentIndex) btn.classList.add("active");
+      if (completed.has(lesson.id)) {
+        const mark = document.createElement("span");
+        mark.textContent = "✓";
+        mark.style.color = "#16a34a";
+        btn.appendChild(mark);
+      }
+      btn.onclick = () => { currentIndex = i; render(); };
+      nav.appendChild(btn);
+    });
+  }
+
+  function renderLesson() {
+    const lesson = lessons[currentIndex];
+    const view = document.getElementById("lessonView");
+    const percent = Math.round((completed.size / lessons.length) * 100);
+
+    view.innerHTML = `
+      <h2>${lesson.title}</h2>
+      ${lesson.content.map(p => `<p>${p}</p>`).join("")}
+
+      <div class="progress"><div class="progress-bar" style="width:${percent}%"></div></div>
+      <p class="progress-text">វឌ្ឍនភាព: ${percent}%</p>
+
+      <div class="quiz">
+        <h3>សំណួរតេស្ត</h3>
+        <p>${lesson.quiz.question}</p>
+        <form id="quizForm">
+          ${lesson.quiz.options.map((opt, i) => `
+            <label><input type="radio" name="answer" value="${i}"> ${opt}</label>
+          `).join("")}
+          <button type="submit" class="btn">ផ្ទៀងផ្ទាត់ចម្លើយ</button>
+        </form>
+        <div id="feedback" class="feedback"></div>
+      </div>
+
+      <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;">
+        ${currentIndex > 0 ? '<button class="btn" id="prevBtn">← មេរៀនមុន</button>' : ""}
+        ${currentIndex < lessons.length - 1 ? '<button class="btn" id="nextBtn">មេរៀនបន្ទាប់ →</button>' : ""}
+      </div>`;
+
+    document.getElementById("quizForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const selected = document.querySelector('input[name="answer"]:checked');
+      const feedback = document.getElementById("feedback");
+
+      if (!selected) {
+        feedback.textContent = "សូមជ្រើសរើសចម្លើយមួយ។";
+        feedback.className = "feedback";
+        return;
+      }
+
+      if (Number(selected.value) === lesson.quiz.answer) {
+        feedback.textContent = "ត្រឹមត្រូវ! 🎉";
+        feedback.className = "feedback correct";
+        if (!completed.has(lesson.id)) {
+          const { error } = await sb.from("progress").insert({ learner_id: learner.id, lesson_id: lesson.id });
+          if (!error) {
+            completed.add(lesson.id);
+            renderNav();
+            const pct = Math.round((completed.size / lessons.length) * 100);
+            view.querySelector(".progress-bar").style.width = pct + "%";
+            view.querySelector(".progress-text").textContent = `វឌ្ឍនភាព: ${pct}%`;
+          }
+        }
+      } else {
+        feedback.textContent = "មិនទាន់ត្រឹមត្រូវ សូមព្យាយាមម្តងទៀត។";
+        feedback.className = "feedback wrong";
+      }
+    };
+
+    const prev = document.getElementById("prevBtn");
+    const next = document.getElementById("nextBtn");
+    if (prev) prev.onclick = () => { currentIndex--; render(); };
+    if (next) next.onclick = () => { currentIndex++; render(); };
+  }
+
+  function render() {
+    renderNav();
+    renderLesson();
+  }
+
+  showLogin();
+</script>
+
+</body>
+</html>
